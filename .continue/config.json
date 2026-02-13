@@ -1,0 +1,21 @@
+{
+  "models": [
+    {
+      "title": "API易 Claude",
+      "provider": "openai",
+      "model": "claude-3-5-sonnet-20241022",
+      "apiKey": "sk-OpejixGNM7CXVy7Z3e14309468Ac4aCe9cC5A188179e8f1a",
+      "apiBase": "https://api.apiyi.com/v1"
+    }
+  ],
+  "tabAutocompleteModel": {
+    "title": "API易 自动补全",
+    "provider": "openai",
+    "model": "claude-3-5-sonnet-20241022",
+    "apiKey": "sk-OpejixGNM7CXVy7Z3e14309468Ac4aCe9cC5A188179e8f1a",
+    "apiBase": "https://api.apiyi.com/v1"
+  },
+  "embeddingsProvider": {
+    "provider": "transformers.js"
+  }
+}

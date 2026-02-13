@@ -1,0 +1,854 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RPG游戏 - Canvas版</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Microsoft YaHei', 'SimHei', sans-serif;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 50%, #1e3c72 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: #fff;
+        }
+        h1 { margin-bottom: 10px; text-shadow: 2px 2px 4px rgba(0,0,0,0.5); font-size: 2em; }
+        #gameCanvas {
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.6), 0 0 20px rgba(255,255,255,0.1) inset;
+            background: #2d2d44;
+        }
+        #message {
+            margin-top: 15px;
+            padding: 12px 25px;
+            background: rgba(0,0,0,0.3);
+            border-radius: 8px;
+            min-height: 45px;
+            min-width: 400px;
+            text-align: center;
+            font-size: 1em;
+        }
+        .highlight { color: #ffd700; font-weight: bold; }
+        .controls { margin-top: 10px; font-size: 0.85em; opacity: 0.8; }
+    </style>
+</head>
+<body>
+    <h1>🎮 RPG 游戏</h1>
+    <canvas id="gameCanvas"></canvas>
+    <div id="message">方向键移动 | 空格对话/确认 | I背包 | Q任务</div>
+    <div class="controls">1-5 战斗操作 | ESC 关闭面板</div>
+
+    <script>
+        // ==================== 常量定义 ====================
+        const TILE = { FLOOR: 0, WALL: 1, POISON: 2, ICE: 3, HEALING: 4, PORTAL: 5 };
+        const ITEM_ID = { HEALTH_POTION: 'hp', MAGIC_POTION: 'mp', KEY: 'key', IRON_SWORD: 'iron_sword', STEEL_SWORD: 'steel_sword', IRON_SHIELD: 'iron_shield', STEEL_SHIELD: 'steel_shield' };
+        const ITEM_INFO = {
+            [ITEM_ID.HEALTH_POTION]: { name: '生命药水', icon: '🧪', effect: 30, type: 'hp' },
+            [ITEM_ID.MAGIC_POTION]: { name: '魔法药水', icon: '💎', effect: 20, type: 'mp' },
+            [ITEM_ID.KEY]: { name: '钥匙', icon: '🗝️', type: 'key' },
+            [ITEM_ID.IRON_SWORD]: { name: '铁剑', icon: '⚔️', atk: 5, type: 'weapon' },
+            [ITEM_ID.STEEL_SWORD]: { name: '钢剑', icon: '⚔️', atk: 10, type: 'weapon' },
+            [ITEM_ID.IRON_SHIELD]: { name: '铁盾', icon: '🛡️', def: 3, type: 'armor' },
+            [ITEM_ID.STEEL_SHIELD]: { name: '钢盾', icon: '🛡️', def: 6, type: 'armor' }
+        };
+        const MONSTER_TYPE = { SLIME: 'slime', SKELETON: 'skeleton', BOSS: 'boss' };
+        const MONSTER_STATS = {
+            [MONSTER_TYPE.SLIME]: { name: '史莱姆', hp: 15, atk: 3, def: 1, exp: 10, gold: 5, icon: '🟢' },
+            [MONSTER_TYPE.SKELETON]: { name: '骷髅兵', hp: 30, atk: 8, def: 4, exp: 25, gold: 15, icon: '💀' },
+            [MONSTER_TYPE.BOSS]: { name: '暗影龙', hp: 80, atk: 15, def: 10, exp: 100, gold: 50, icon: '🐉' }
+        };
+        const ROOM_ID = { VILLAGE: 0, FOREST: 1, CAVE: 2, BOSS: 3 };
+        const ROOM_NAMES = ['初始村庄', '森林', '洞穴', 'Boss房间'];
+        const SKILLS = [
+            { id: 'fireball', name: '火球术', icon: '🔥', mp: 10, dmg: 1.5, lv: 2 },
+            { id: 'heal', name: '治疗术', icon: '💚', mp: 8, heal: 20, lv: 3 },
+            { id: 'thunder', name: '雷击', icon: '⚡', mp: 15, dmg: 2, lv: 5 }
+        ];
+
+        // ==================== 地图数据（每个房间 8x6）====================
+        const MAP_TEMPLATES = {
+            [ROOM_ID.VILLAGE]: {
+                terrain: [
+                    [1,1,1,1,1,1,1,1],[1,0,0,0,0,0,5,1],[1,0,0,1,1,0,0,1],
+                    [1,0,0,1,0,0,0,1],[1,0,0,0,0,1,0,1],[1,1,1,1,5,1,1,1]
+                ],
+                obstacles: [],
+                npcs: [{ x: 4, y: 4, type: 'quest', msg: '消灭3只史莱姆，我会给你铁剑！', questId: 0 }],
+                shop: { x: 5, y: 1 },
+                items: [],
+                monsters: []
+            },
+            [ROOM_ID.FOREST]: {
+                terrain: [
+                    [1,1,5,1,1,1,1,1],[1,0,0,0,0,0,0,1],[1,0,0,2,0,0,0,1],
+                    [1,0,0,0,0,0,0,1],[1,0,0,0,0,0,0,1],[1,1,1,1,1,1,5,1]
+                ],
+                obstacles: [],
+                npcs: [{ x: 4, y: 3, type: 'quest', msg: '找到洞穴钥匙，我给你钢盾！', questId: 1 }],
+                shop: null,
+                items: [{ x: 3, y: 2, id: ITEM_ID.KEY, qty: 1 }],
+                monsters: [
+                    { x: 2, y: 2, type: MONSTER_TYPE.SLIME },
+                    { x: 4, y: 4, type: MONSTER_TYPE.SLIME },
+                    { x: 5, y: 2, type: MONSTER_TYPE.SKELETON }
+                ]
+            },
+            [ROOM_ID.CAVE]: {
+                terrain: [
+                    [1,1,1,1,5,1,1,1],[1,0,0,0,0,0,0,1],[1,0,2,0,0,2,0,1],
+                    [1,0,0,4,4,0,0,1],[1,0,0,0,0,0,0,1],[1,1,1,1,1,1,1,1]
+                ],
+                obstacles: [],
+                npcs: [],
+                shop: null,
+                items: [{ x: 2, y: 1, id: ITEM_ID.HEALTH_POTION, qty: 1 }],
+                monsters: [
+                    { x: 3, y: 2, type: MONSTER_TYPE.SKELETON },
+                    { x: 5, y: 3, type: MONSTER_TYPE.SKELETON },
+                    { x: 4, y: 4, type: MONSTER_TYPE.SLIME }
+                ]
+            },
+            [ROOM_ID.BOSS]: {
+                terrain: [
+                    [1,1,1,1,1,1,1,1],[1,0,0,0,0,0,0,1],[1,0,0,0,0,0,0,1],
+                    [1,0,0,0,0,0,0,1],[1,0,0,0,0,0,0,1],[1,1,1,1,5,1,1,1]
+                ],
+                obstacles: [],
+                npcs: [],
+                shop: null,
+                items: [],
+                monsters: [{ x: 4, y: 3, type: MONSTER_TYPE.BOSS }]
+            }
+        };
+
+        // 传送门目标：{ fromRoom, fromX, fromY } -> { toRoom, toX, toY }
+        const PORTALS = [
+            { from: { r: ROOM_ID.VILLAGE, x: 6, y: 1 }, to: { r: ROOM_ID.FOREST, x: 2, y: 0 } },
+            { from: { r: ROOM_ID.VILLAGE, x: 4, y: 5 }, to: { r: ROOM_ID.FOREST, x: 6, y: 5 } },
+            { from: { r: ROOM_ID.FOREST, x: 2, y: 0 }, to: { r: ROOM_ID.VILLAGE, x: 6, y: 1 } },
+            { from: { r: ROOM_ID.FOREST, x: 6, y: 5 }, to: { r: ROOM_ID.CAVE, x: 4, y: 0 } },
+            { from: { r: ROOM_ID.CAVE, x: 4, y: 0 }, to: { r: ROOM_ID.FOREST, x: 6, y: 5 } },
+            { from: { r: ROOM_ID.CAVE, x: 1, y: 1 }, to: { r: ROOM_ID.BOSS, x: 4, y: 5 } },
+            { from: { r: ROOM_ID.BOSS, x: 4, y: 5 }, to: { r: ROOM_ID.CAVE, x: 1, y: 1 } }
+        ];
+
+        const COLS = 8, ROWS = 6, TILE_SIZE = 50;
+        const STATUS_BAR_H = 60;
+        const SHOP_ITEMS = [
+            { id: ITEM_ID.HEALTH_POTION, price: 20, name: '生命药水' },
+            { id: ITEM_ID.MAGIC_POTION, price: 25, name: '魔法药水' },
+            { id: ITEM_ID.IRON_SWORD, price: 100, name: '铁剑' },
+            { id: ITEM_ID.STEEL_SWORD, price: 200, name: '钢剑' },
+            { id: ITEM_ID.IRON_SHIELD, price: 80, name: '铁盾' },
+            { id: ITEM_ID.STEEL_SHIELD, price: 150, name: '钢盾' }
+        ];
+        const QUESTS = [
+            { id: 0, desc: '消灭3只史莱姆', target: 3, reward: { id: ITEM_ID.IRON_SWORD, qty: 1 } },
+            { id: 1, desc: '找到洞穴钥匙', target: 1, reward: { id: ITEM_ID.STEEL_SHIELD, qty: 1 } }
+        ];
+
+        // ==================== 游戏主类 ====================
+        class RPGGame {
+            constructor() {
+                this.canvas = document.getElementById('gameCanvas');
+                this.ctx = this.canvas.getContext('2d');
+                this.msgDiv = document.getElementById('message');
+                this.canvas.width = COLS * TILE_SIZE;
+                this.canvas.height = STATUS_BAR_H + ROWS * TILE_SIZE;
+
+                this.player = {
+                    x: 1, y: 1, room: ROOM_ID.VILLAGE,
+                    hp: 50, maxHp: 50, mp: 30, maxMp: 30,
+                    atk: 8, def: 4, level: 1, exp: 0, gold: 50,
+                    inventory: {},
+                    weapon: null, armor: null
+                };
+                this.getPlayerAtk = () => this.player.atk + (ITEM_INFO[this.player.weapon]?.atk || 0);
+                this.getPlayerDef = () => this.player.def + (ITEM_INFO[this.player.armor]?.def || 0);
+
+                this.questProgress = [0, 0]; // 史莱姆击杀数, 钥匙拥有(0/1)
+                this.explored = {};  // room -> Set("x,y")
+                this.currentRoom = ROOM_ID.VILLAGE;
+                this.roomData = this.initRoomData();
+                this.visionRange = 3;
+
+                this.inBattle = false;
+                this.battleMonster = null;
+                this.battleMonsterIdx = -1;
+                this.playerDefending = false;
+                this.battleLog = [];
+                this.battleChoice = 0;
+
+                this.inventoryOpen = false;
+                this.shopOpen = false;
+                this.nearShop = false;
+                this.nearNPC = null;
+                this.questPanelOpen = false;
+                this.lastMoveTime = 0;
+                this.monsterMoveCounter = 0;
+
+                this.playerSprite = new Image();
+                this.playerSprite.src = 'image/player/down.png';
+                this.playerSprite.onload = () => this.playerSpriteLoaded = true;
+                this.playerSpriteLoaded = false;
+                this.playerFrame = 0;
+                this.animTimer = 0;
+
+                this.setupControls();
+                this.initExplored();
+                this.renderLoop();
+            }
+
+            initRoomData() {
+                const data = {};
+                for (const rid of Object.values(ROOM_ID)) {
+                    const t = MAP_TEMPLATES[rid];
+                    data[rid] = {
+                        terrain: t.terrain.map(r => [...r]),
+                        npcs: t.npcs.map(n => ({ ...n })),
+                        items: t.items.map(i => ({ ...i })),
+                        monsters: t.monsters.map(m => ({ ...m, hp: MONSTER_STATS[m.type].hp, maxHp: MONSTER_STATS[m.type].hp, alive: true }))
+                    };
+                }
+                return data;
+            }
+
+            initExplored() {
+                for (const rid of Object.values(ROOM_ID)) this.explored[rid] = new Set();
+                this.markExplored(ROOM_ID.VILLAGE, this.player.x, this.player.y);
+            }
+
+            setupControls() {
+                document.addEventListener('keydown', e => {
+                    if (this.questPanelOpen) {
+                        if (e.key === 'q' || e.key === 'Q' || e.key === 'Escape') this.questPanelOpen = false;
+                        this.render(); return;
+                    }
+                    if (this.shopOpen) {
+                        if (e.key === 'Escape') { this.shopOpen = false; this.render(); }
+                        else if ('123456'.includes(e.key)) {
+                            const idx = parseInt(e.key) - 1;
+                            const s = SHOP_ITEMS[idx];
+                            if (s && this.player.gold >= s.price) {
+                                this.player.gold -= s.price;
+                                this.addItem(s.id, 1);
+                                const info = ITEM_INFO[s.id];
+                                if (info?.type === 'weapon' && (!this.player.weapon || (ITEM_INFO[this.player.weapon]?.atk || 0) < (info.atk || 0)))
+                                    this.player.weapon = s.id;
+                                if (info?.type === 'armor' && (!this.player.armor || (ITEM_INFO[this.player.armor]?.def || 0) < (info.def || 0)))
+                                    this.player.armor = s.id;
+                                this.updateMsg('购买 ' + (info?.name || s.name));
+                            }
+                        }
+                        this.render();
+                        return;
+                    }
+                    if (this.inventoryOpen) {
+                        if (e.key === 'i' || e.key === 'I' || e.key === 'Escape') { this.inventoryOpen = false; this.render(); }
+                        return;
+                    }
+                    if (this.inBattle) {
+                        if ('12345'.includes(e.key)) {
+                            this.battleChoice = parseInt(e.key);
+                            this.doBattleAction();
+                        }
+                        e.preventDefault();
+                        return;
+                    }
+                    if (e.key === 'i' || e.key === 'I') { this.inventoryOpen = true; this.render(); return; }
+                    if (e.key === 'q' || e.key === 'Q') { this.questPanelOpen = true; this.render(); return; }
+                    if (e.key === 'Escape') { this.render(); return; }
+
+                    if (e.key === ' ') {
+                        if (this.nearShop) { this.shopOpen = true; this.render(); e.preventDefault(); return; }
+                        if (this.nearNPC) { this.talkToNPC(); e.preventDefault(); return; }
+                        return;
+                    }
+
+                    let dx = 0, dy = 0;
+                    if (e.key === 'ArrowUp') dy = -1;
+                    else if (e.key === 'ArrowDown') dy = 1;
+                    else if (e.key === 'ArrowLeft') dx = -1;
+                    else if (e.key === 'ArrowRight') dx = 1;
+                    else return;
+                    e.preventDefault();
+
+                    this.tryMove(dx, dy);
+                });
+            }
+
+            tryMove(dx, dy) {
+                const rd = this.roomData[this.currentRoom];
+                let nx = this.player.x + dx, ny = this.player.y + dy;
+                const tile = rd.terrain[ny]?.[nx];
+
+                if (tile === undefined || tile === TILE.WALL) return;
+
+                // 冰面滑行
+                if (tile === TILE.ICE) {
+                    while (true) {
+                        nx += dx; ny += dy;
+                        const nt = rd.terrain[ny]?.[nx];
+                        if (nt === undefined || nt === TILE.WALL) { nx -= dx; ny -= dy; break; }
+                        if (nt !== TILE.ICE) break;
+                    }
+                }
+
+                this.player.x = nx;
+                this.player.y = ny;
+
+                // 地形效果
+                const curTile = rd.terrain[ny][nx];
+                if (curTile === TILE.POISON) { this.player.hp = Math.max(0, this.player.hp - 5); this.updateMsg('毒沼泽扣5HP！'); }
+                if (curTile === TILE.HEALING) { this.player.hp = Math.min(this.player.maxHp, this.player.hp + 10); this.updateMsg('回复泉恢复10HP'); }
+
+                // 传送
+                const portal = PORTALS.find(p => p.from.r === this.currentRoom && p.from.x === nx && p.from.y === ny);
+                if (portal) {
+                    this.currentRoom = portal.to.r;
+                    this.player.x = portal.to.x;
+                    this.player.y = portal.to.y;
+                    this.player.room = this.currentRoom;
+                    this.updateMsg('进入 ' + ROOM_NAMES[this.currentRoom]);
+                }
+
+                this.markExplored(this.currentRoom, this.player.x, this.player.y);
+                this.pickupItems();
+                this.checkMonsterCollision();
+                this.checkNPCProximity();
+                this.checkShopProximity();
+                this.monsterPatrol();
+                this.lastMoveTime = Date.now();
+                this.render();
+            }
+
+            markExplored(room, x, y) {
+                for (let dy = -this.visionRange; dy <= this.visionRange; dy++)
+                    for (let dx = -this.visionRange; dx <= this.visionRange; dx++)
+                        if (dx * dx + dy * dy <= this.visionRange * this.visionRange)
+                            this.explored[room].add(`${x + dx},${y + dy}`);
+            }
+
+            isVisible(room, x, y) {
+                const d = Math.abs(x - this.player.x) + Math.abs(y - this.player.y);
+                if (d > this.visionRange) return false;
+                return this.player.room === room;
+            }
+
+            isExplored(room, x, y) {
+                return this.explored[room].has(`${x},${y}`);
+            }
+
+            pickupItems() {
+                const rd = this.roomData[this.currentRoom];
+                const idx = rd.items.findIndex(i => i.x === this.player.x && i.y === this.player.y);
+                if (idx < 0) return;
+                const it = rd.items[idx];
+                this.addItem(it.id, it.qty || 1);
+                rd.items.splice(idx, 1);
+                if (it.id === ITEM_ID.KEY) this.questProgress[1] = 1;
+                this.updateMsg('获得 ' + (ITEM_INFO[it.id]?.name || it.id));
+            }
+
+            addItem(id, qty) {
+                this.player.inventory[id] = (this.player.inventory[id] || 0) + qty;
+            }
+
+            checkMonsterCollision() {
+                const rd = this.roomData[this.currentRoom];
+                const idx = rd.monsters.findIndex(m => m.alive && m.x === this.player.x && m.y === this.player.y);
+                if (idx >= 0) this.startBattle(idx);
+            }
+
+            startBattle(idx) {
+                const rd = this.roomData[this.currentRoom];
+                const m = rd.monsters[idx];
+                const stats = MONSTER_STATS[m.type];
+                this.battleMonster = { ...m, maxHp: stats.hp, atk: stats.atk, def: stats.def, exp: stats.exp, gold: stats.gold, name: stats.name, icon: stats.icon };
+                this.battleMonsterIdx = idx;
+                this.inBattle = true;
+                this.battleLog = ['遇到' + stats.name + '！'];
+                this.playerDefending = false;
+            }
+
+            doBattleAction() {
+                const choice = this.battleChoice;
+                const rd = this.roomData[this.currentRoom];
+                const m = rd.monsters[this.battleMonsterIdx];
+                const stats = MONSTER_STATS[m.type];
+
+                if (choice === 1) { // 攻击
+                    const dmg = Math.max(1, this.getPlayerAtk() - m.def / 2 + (Math.random() * 5 - 2));
+                    const finalDmg = this.playerDefending ? Math.floor(dmg / 2) : dmg;
+                    m.hp = Math.max(0, m.hp - finalDmg);
+                    this.battleLog.push('你对' + stats.name + '造成' + finalDmg + '点伤害！');
+                } else if (choice === 2) { // 防御
+                    this.playerDefending = true;
+                    this.battleLog.push('你进入防御姿态！');
+                } else if (choice === 3) { // 道具
+                    const hasHp = (this.player.inventory[ITEM_ID.HEALTH_POTION] || 0) > 0;
+                    const hasMp = (this.player.inventory[ITEM_ID.MAGIC_POTION] || 0) > 0;
+                    if (hasHp) {
+                        this.player.inventory[ITEM_ID.HEALTH_POTION]--;
+                        if (!this.player.inventory[ITEM_ID.HEALTH_POTION]) delete this.player.inventory[ITEM_ID.HEALTH_POTION];
+                        this.player.hp = Math.min(this.player.maxHp, this.player.hp + 30);
+                        this.battleLog.push('使用生命药水，恢复30HP！');
+                    } else if (hasMp) {
+                        this.player.inventory[ITEM_ID.MAGIC_POTION]--;
+                        if (!this.player.inventory[ITEM_ID.MAGIC_POTION]) delete this.player.inventory[ITEM_ID.MAGIC_POTION];
+                        this.player.mp = Math.min(this.player.maxMp, this.player.mp + 20);
+                        this.battleLog.push('使用魔法药水，恢复20MP！');
+                    } else this.battleLog.push('没有可用道具！');
+                } else if (choice === 4) { // 技能
+                    const learned = SKILLS.filter(s => this.player.level >= s.lv && this.player.mp >= (s.mp || 0));
+                    const healSkill = learned.find(s => s.heal);
+                    const dmgSkills = learned.filter(s => s.dmg).sort((a, b) => (b.dmg || 0) - (a.dmg || 0));
+                    const useHeal = healSkill && this.player.hp < this.player.maxHp * 0.5;
+                    const canUse = useHeal && healSkill ? healSkill : dmgSkills[0];
+                    if (!canUse) { this.battleLog.push('无法使用技能！（需等级/MP）'); }
+                    else if (canUse.heal) {
+                        this.player.mp -= canUse.mp;
+                        this.player.hp = Math.min(this.player.maxHp, this.player.hp + canUse.heal);
+                        this.battleLog.push('使用' + canUse.name + '，恢复' + canUse.heal + 'HP！');
+                    } else {
+                        this.player.mp -= canUse.mp;
+                        const dmg = Math.max(1, Math.floor(this.getPlayerAtk() * canUse.dmg - m.def / 2));
+                        m.hp = Math.max(0, m.hp - dmg);
+                        this.battleLog.push('使用' + canUse.name + '，造成' + dmg + '点伤害！');
+                    }
+                } else if (choice === 5) { // 逃跑
+                    if (Math.random() < 0.5) {
+                        this.battleLog.push('逃跑成功！');
+                        this.endBattle(false);
+                        this.render();
+                        return;
+                    }
+                    this.battleLog.push('逃跑失败！');
+                }
+
+                this.playerDefending = false;
+
+                if (m.hp <= 0) {
+                    m.alive = false;
+                    this.player.exp += stats.exp;
+                    this.player.gold += stats.gold;
+                    if (m.type === MONSTER_TYPE.SLIME) this.questProgress[0]++;
+                    this.battleLog.push('击败' + stats.name + '！获得' + stats.exp + '经验，' + stats.gold + '金币');
+                    this.checkLevelUp();
+                    this.endBattle(true);
+                    this.render();
+                    return;
+                }
+
+                // 怪物回合
+                const mDmg = Math.max(1, stats.atk - this.getPlayerDef() / 2 + (Math.random() * 5 - 2));
+                const taken = this.playerDefending ? Math.floor(mDmg / 2) : mDmg;
+                this.player.hp = Math.max(0, this.player.hp - taken);
+                this.battleLog.push(stats.name + '对你造成' + taken + '点伤害！');
+
+                if (this.player.hp <= 0) {
+                    this.battleLog.push('你已阵亡...');
+                    this.endBattle(false);
+                    this.player.hp = 1;
+                    this.player.x = 1; this.player.y = 1; this.currentRoom = ROOM_ID.VILLAGE;
+                }
+
+                this.battleMonster = { ...m, maxHp: stats.hp };
+                this.render();
+            }
+
+            checkLevelUp() {
+                const need = this.player.level * 20;
+                while (this.player.exp >= need) {
+                    this.player.exp -= need;
+                    this.player.level++;
+                    this.player.maxHp += 10;
+                    this.player.maxMp += 5;
+                    this.player.atk += 2;
+                    this.player.def += 1;
+                    this.player.hp = this.player.maxHp;
+                    this.player.mp = this.player.maxMp;
+                    this.updateMsg('升级！Lv.' + this.player.level);
+                }
+            }
+
+            endBattle(victory) {
+                this.inBattle = false;
+                this.battleMonster = null;
+                this.battleMonsterIdx = -1;
+            }
+
+            monsterPatrol() {
+                this.monsterMoveCounter++;
+                if (this.monsterMoveCounter < 2) return;
+                this.monsterMoveCounter = 0;
+
+                const rd = this.roomData[this.currentRoom];
+                const dirs = [[0,-1],[0,1],[-1,0],[1,0]];
+                rd.monsters.forEach(m => {
+                    if (!m.alive || m.type === MONSTER_TYPE.BOSS) return;
+                    const d = dirs[Math.floor(Math.random() * 4)];
+                    const nx = m.x + d[0], ny = m.y + d[1];
+                    if (nx < 1 || nx >= COLS - 1 || ny < 1 || ny >= ROWS - 1) return;
+                    const tile = rd.terrain[ny][nx];
+                    if (tile === TILE.WALL) return;
+                    const blocked = rd.monsters.some(o => o.alive && o.x === nx && o.y === ny) ||
+                        rd.npcs.some(n => n.x === nx && n.y === ny) ||
+                        (nx === this.player.x && ny === this.player.y);
+                    if (!blocked) { m.x = nx; m.y = ny; }
+                });
+            }
+
+            checkNPCProximity() {
+                const rd = this.roomData[this.currentRoom];
+                this.nearNPC = rd.npcs.find(n => Math.abs(n.x - this.player.x) <= 1 && Math.abs(n.y - this.player.y) <= 1 && !(n.x === this.player.x && n.y === this.player.y)) || null;
+            }
+
+            checkShopProximity() {
+                const shop = MAP_TEMPLATES[this.currentRoom].shop;
+                this.nearShop = shop && Math.abs(shop.x - this.player.x) <= 1 && Math.abs(shop.y - this.player.y) <= 1;
+            }
+
+            talkToNPC() {
+                if (!this.nearNPC) return;
+                const n = this.nearNPC;
+                if (n.type === 'quest') {
+                    const q = QUESTS[n.questId];
+                    if (n.questId === 0 && this.questProgress[0] >= q.target) {
+                        this.addItem(q.reward.id, q.reward.qty);
+                        this.questProgress[0] = 999;
+                        const info = ITEM_INFO[q.reward.id];
+                        if (info?.type === 'weapon') this.player.weapon = q.reward.id;
+                        if (info?.type === 'armor') this.player.armor = q.reward.id;
+                        this.updateMsg('获得' + info?.name + '！已装备');
+                    } else if (n.questId === 1 && this.questProgress[1] >= q.target) {
+                        this.addItem(q.reward.id, q.reward.qty);
+                        this.questProgress[1] = 999;
+                        const info = ITEM_INFO[q.reward.id];
+                        if (info?.type === 'weapon') this.player.weapon = q.reward.id;
+                        if (info?.type === 'armor') this.player.armor = q.reward.id;
+                        this.updateMsg('获得' + info?.name + '！已装备');
+                    } else {
+                        this.updateMsg(n.msg);
+                    }
+                }
+            }
+
+            updateMsg(txt) {
+                this.msgDiv.innerHTML = txt;
+            }
+
+            // ==================== 渲染 ====================
+            render() {
+                const ctx = this.ctx;
+                const w = this.canvas.width, h = this.canvas.height;
+
+                ctx.fillStyle = '#1a1a2e';
+                ctx.fillRect(0, 0, w, h);
+
+                this.drawStatusBar();
+                ctx.save();
+                ctx.translate(0, STATUS_BAR_H);
+                this.drawMap();
+                this.drawItems();
+                this.drawMonsters();
+                this.drawNPCs();
+                this.drawPortals();
+                this.drawPlayer();
+                ctx.restore();
+
+                if (this.inBattle) this.drawBattlePanel();
+                if (this.inventoryOpen) this.drawInventory();
+                if (this.shopOpen) this.drawShop();
+                if (this.questPanelOpen) this.drawQuestPanel();
+
+                if (!this.inBattle && !this.inventoryOpen && !this.shopOpen && !this.questPanelOpen) {
+                    if (this.nearShop) this.msgDiv.innerHTML = '按 <span class="highlight">空格</span> 打开商店';
+                    else if (this.nearNPC) this.msgDiv.innerHTML = '按 <span class="highlight">空格</span> 对话';
+                    else this.msgDiv.innerHTML = '方向键移动 | 空格对话/确认 | I背包 | Q任务';
+                }
+            }
+
+            drawStatusBar() {
+                const ctx = this.ctx;
+                const barH = 50;
+                ctx.fillStyle = 'rgba(0,0,0,0.7)';
+                ctx.fillRect(0, 0, this.canvas.width, STATUS_BAR_H);
+
+                const mw = this.canvas.width * 0.35;
+                const x = 10, y = 8;
+
+                ctx.fillStyle = '#333';
+                ctx.fillRect(x, y, mw, 12);
+                ctx.fillStyle = '#c0392b';
+                ctx.fillRect(x, y, mw * (this.player.hp / this.player.maxHp), 12);
+                ctx.fillStyle = '#fff';
+                ctx.font = '10px sans-serif';
+                ctx.fillText('HP ' + this.player.hp + '/' + this.player.maxHp, x + 4, y + 10);
+
+                ctx.fillStyle = '#333';
+                ctx.fillRect(x, y + 18, mw, 12);
+                ctx.fillStyle = '#2980b9';
+                ctx.fillRect(x, y + 18, mw * (this.player.mp / this.player.maxMp), 12);
+                ctx.fillText('MP ' + this.player.mp + '/' + this.player.maxMp, x + 4, y + 30);
+
+                ctx.fillStyle = '#ffd700';
+                ctx.font = 'bold 14px sans-serif';
+                ctx.fillText('Lv.' + this.player.level, x + mw + 20, y + 22);
+                ctx.fillText('💰' + this.player.gold, x + mw + 70, y + 22);
+                ctx.fillText(ROOM_NAMES[this.currentRoom], this.canvas.width - 120, y + 22);
+            }
+
+            drawMap() {
+                const ctx = this.ctx;
+                const rd = this.roomData[this.currentRoom];
+                const now = Date.now();
+
+                for (let y = 0; y < ROWS; y++) {
+                    for (let x = 0; x < COLS; x++) {
+                        const explored = this.isExplored(this.currentRoom, x, y);
+                        const visible = this.isVisible(this.currentRoom, x, y);
+
+                        if (!explored) {
+                            ctx.fillStyle = '#000';
+                            ctx.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                            ctx.strokeStyle = '#222';
+                            ctx.strokeRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                            continue;
+                        }
+
+                        if (!visible) {
+                            ctx.fillStyle = 'rgba(0,0,0,0.7)';
+                            ctx.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                        }
+
+                        const tile = rd.terrain[y][x];
+                        let color = '#3d3d5c';
+                        if (tile === TILE.WALL) color = '#1a1a2e';
+                        else if (tile === TILE.POISON) color = '#27ae60';
+                        else if (tile === TILE.ICE) color = '#3498db';
+                        else if (tile === TILE.HEALING) color = '#2ecc71';
+                        else if (tile === TILE.PORTAL) color = (Math.floor(now/300)%2) ? '#2ecc71' : '#1abc9c';
+
+                        ctx.globalAlpha = visible ? 1 : 0.5;
+                        ctx.fillStyle = color;
+                        ctx.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                        ctx.globalAlpha = 1;
+
+                        ctx.strokeStyle = '#4a4a6a';
+                        ctx.strokeRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                    }
+                }
+            }
+
+            drawItems() {
+                const ctx = this.ctx;
+                const rd = this.roomData[this.currentRoom];
+                rd.items.forEach(i => {
+                    if (!this.isVisible(this.currentRoom, i.x, i.y)) return;
+                    const info = ITEM_INFO[i.id];
+                    ctx.font = '28px sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.fillText(info?.icon || '?', (i.x + 0.5) * TILE_SIZE, (i.y + 0.7) * TILE_SIZE);
+                });
+            }
+
+            drawMonsters() {
+                const ctx = this.ctx;
+                const rd = this.roomData[this.currentRoom];
+                rd.monsters.forEach(m => {
+                    if (!m.alive || !this.isVisible(this.currentRoom, m.x, m.y)) return;
+                    const s = MONSTER_STATS[m.type];
+                    ctx.font = '28px sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.fillText(s.icon, (m.x + 0.5) * TILE_SIZE, (m.y + 0.6) * TILE_SIZE);
+                    ctx.font = '9px sans-serif';
+                    ctx.fillStyle = '#fff';
+                    ctx.fillText(s.name, (m.x + 0.5) * TILE_SIZE, (m.y + 0.95) * TILE_SIZE);
+                });
+            }
+
+            drawNPCs() {
+                const ctx = this.ctx;
+                const rd = this.roomData[this.currentRoom];
+                const shop = MAP_TEMPLATES[this.currentRoom].shop;
+                if (shop && this.isVisible(this.currentRoom, shop.x, shop.y)) {
+                    ctx.fillStyle = '#f39c12';
+                    ctx.beginPath();
+                    ctx.arc((shop.x + 0.5) * TILE_SIZE, (shop.y + 0.5) * TILE_SIZE, TILE_SIZE * 0.35, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.fillStyle = '#fff';
+                    ctx.font = '10px sans-serif';
+                    ctx.fillText('商人', (shop.x + 0.5) * TILE_SIZE - 10, (shop.y + 0.6) * TILE_SIZE);
+                }
+                rd.npcs.forEach(n => {
+                    if (!this.isVisible(this.currentRoom, n.x, n.y)) return;
+                    ctx.fillStyle = '#2ed573';
+                    ctx.beginPath();
+                    ctx.arc((n.x + 0.5) * TILE_SIZE, (n.y + 0.5) * TILE_SIZE, TILE_SIZE * 0.35, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.fillStyle = '#fff';
+                    ctx.font = '10px sans-serif';
+                    ctx.fillText('NPC', (n.x + 0.5) * TILE_SIZE, (n.y + 0.6) * TILE_SIZE);
+                });
+            }
+
+            drawPortals() {
+                const ctx = this.ctx;
+                const rd = this.roomData[this.currentRoom];
+                for (let y = 0; y < ROWS; y++)
+                    for (let x = 0; x < COLS; x++)
+                        if (rd.terrain[y][x] === TILE.PORTAL && this.isVisible(this.currentRoom, x, y)) {
+                            ctx.font = '24px sans-serif';
+                            ctx.textAlign = 'center';
+                            ctx.fillText('⬆️', (x + 0.5) * TILE_SIZE, (y + 0.6) * TILE_SIZE);
+                        }
+            }
+
+            drawPlayer() {
+                const ctx = this.ctx;
+                if (this.playerSpriteLoaded) {
+                    const f = Math.floor(this.animTimer / 200) % 4;
+                    const sx = f * 96;
+                    ctx.imageSmoothingEnabled = false;
+                    ctx.drawImage(this.playerSprite, sx, 0, 96, 96, this.player.x * TILE_SIZE, this.player.y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                    ctx.imageSmoothingEnabled = true;
+                } else {
+                    ctx.fillStyle = '#ff4757';
+                    ctx.beginPath();
+                    ctx.arc((this.player.x + 0.5) * TILE_SIZE, (this.player.y + 0.5) * TILE_SIZE, TILE_SIZE * 0.4, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+
+            drawBattlePanel() {
+                const ctx = this.ctx;
+                const pw = 400, ph = 280;
+                const px = (this.canvas.width - pw) / 2, py = (this.canvas.height - ph) / 2;
+
+                ctx.fillStyle = 'rgba(0,0,0,0.9)';
+                ctx.strokeStyle = '#ffd700';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.roundRect(px, py, pw, ph, 12);
+                ctx.fill();
+                ctx.stroke();
+
+                const m = this.battleMonster;
+                ctx.fillStyle = '#fff';
+                ctx.font = 'bold 18px sans-serif';
+                ctx.fillText(m?.name + ' HP:' + (m?.hp || 0) + '/' + (m?.maxHp || 0), px + 20, py + 35);
+
+                ctx.font = '13px sans-serif';
+                ctx.fillStyle = '#aaa';
+                const logs = this.battleLog.slice(-5);
+                logs.forEach((l, i) => ctx.fillText(l, px + 20, py + 60 + i * 22));
+
+                ctx.fillStyle = '#ffd700';
+                ctx.font = '14px sans-serif';
+                const opts = ['1.⚔️攻击', '2.🛡️防御', '3.🎒道具', '4.🔥技能', '5.🏃逃跑'];
+                opts.forEach((o, i) => ctx.fillText(o, px + 20 + (i % 2) * 180, py + 185 + Math.floor(i / 2) * 28));
+            }
+
+            drawInventory() {
+                const ctx = this.ctx;
+                const pw = 350, ph = 300;
+                const px = (this.canvas.width - pw) / 2, py = (this.canvas.height - ph) / 2;
+
+                ctx.fillStyle = 'rgba(0,0,0,0.9)';
+                ctx.strokeStyle = '#2ecc71';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.roundRect(px, py, pw, ph, 12);
+                ctx.fill();
+                ctx.stroke();
+
+                ctx.fillStyle = '#2ecc71';
+                ctx.font = 'bold 18px sans-serif';
+                ctx.fillText('🎒 背包 (I 关闭)', px + 20, py + 35);
+
+                const inv = this.player.inventory;
+                const ids = Object.keys(inv);
+                ctx.font = '14px sans-serif';
+                ctx.fillStyle = '#fff';
+                ids.slice(0, 12).forEach((id, i) => {
+                    const info = ITEM_INFO[id];
+                    const name = info?.name || id;
+                    const icon = info?.icon || '?';
+                    ctx.fillText(icon + ' ' + name + ' x' + inv[id], px + 20, py + 65 + i * 22);
+                });
+                if (ids.length === 0) ctx.fillText('（空）', px + 20, py + 65);
+
+                ctx.fillStyle = '#ffd700';
+                ctx.fillText('装备: ' + (ITEM_INFO[this.player.weapon]?.name || '无') + ' / ' + (ITEM_INFO[this.player.armor]?.name || '无'), px + 20, py + ph - 30);
+            }
+
+            drawShop() {
+                const ctx = this.ctx;
+                const pw = 360, ph = 340;
+                const px = (this.canvas.width - pw) / 2, py = (this.canvas.height - ph) / 2;
+
+                ctx.fillStyle = 'rgba(0,0,0,0.9)';
+                ctx.strokeStyle = '#f39c12';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.roundRect(px, py, pw, ph, 12);
+                ctx.fill();
+                ctx.stroke();
+
+                ctx.fillStyle = '#f39c12';
+                ctx.font = 'bold 18px sans-serif';
+                ctx.fillText('🏪 商店 金币:' + this.player.gold + ' (ESC关闭)', px + 20, py + 35);
+
+                ctx.font = '14px sans-serif';
+                SHOP_ITEMS.forEach((s, i) => {
+                    const info = ITEM_INFO[s.id];
+                    ctx.fillStyle = this.player.gold >= s.price ? '#fff' : '#666';
+                    ctx.fillText(info?.icon + ' ' + s.name + ' - ' + s.price + '金币', px + 20, py + 65 + i * 28);
+                });
+                ctx.fillStyle = '#aaa';
+                ctx.font = '12px sans-serif';
+                ctx.fillText('按 1-6 键购买对应商品', px + 20, py + ph - 25);
+            }
+
+            drawQuestPanel() {
+                const ctx = this.ctx;
+                const pw = 380, ph = 200;
+                const px = (this.canvas.width - pw) / 2, py = (this.canvas.height - ph) / 2;
+
+                ctx.fillStyle = 'rgba(0,0,0,0.9)';
+                ctx.strokeStyle = '#9b59b6';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.roundRect(px, py, pw, ph, 12);
+                ctx.fill();
+                ctx.stroke();
+
+                ctx.fillStyle = '#9b59b6';
+                ctx.font = 'bold 18px sans-serif';
+                ctx.fillText('📜 任务 (Q 关闭)', px + 20, py + 35);
+
+                ctx.font = '14px sans-serif';
+                QUESTS.forEach((q, i) => {
+                    const done = (i === 0 && this.questProgress[0] >= q.target) || (i === 1 && this.questProgress[1] >= q.target);
+                    ctx.fillStyle = done ? '#2ecc71' : '#fff';
+                    const cur = i === 0 ? this.questProgress[0] : this.questProgress[1];
+                    ctx.fillText(q.desc + ' ' + cur + '/' + q.target + (done ? ' ✓' : ''), px + 20, py + 70 + i * 35);
+                });
+            }
+
+            renderLoop() {
+                this.animTimer += 50;
+                this.render();
+                requestAnimationFrame(() => this.renderLoop());
+            }
+        }
+
+        window.addEventListener('load', () => new RPGGame());
+    </script>
+</body>
+</html>
